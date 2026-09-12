@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>实时行情引擎 · ETF报价与K线</title>
+<style>
+  :root {
+    --bg: #f5f6fa;
+    --card: #ffffff;
+    --text: #1f2328;
+    --muted: #6b7280;
+    --primary: #1a4b8c;
+    --accent: #c8a24a;
+    --red: #b3372e;
+    --green: #1e7d4f;
+    --border: #e3e6ee;
+    --shadow: 0 2px 12px rgba(0,0,0,.06);
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+  }
+  .container { max-width: 1000px; margin: 0 auto; padding: 0 24px; }
+
+  /* Header */
+  header {
+    background: linear-gradient(135deg, #12233f 0%, #1a4b8c 100%);
+    color: #fff;
+    padding: 48px 0 56px;
+  }
+  header h1 { font-size: 28px; font-weight: 700; letter-spacing: .5px; }
+  header .sub { margin-top: 10px; color: #c9d6e8; font-size: 15px; }
+  .badge {
+    display:inline-block; padding: 4px 12px; border-radius: 20px;
+    background: rgba(255,255,255,.14); color:#fff; font-size: 12.5px;
+    margin-bottom: 14px; letter-spacing: .5px;
+  }
+  .date-tag { margin-top:14px; font-size:13px; color:#9fb3d0; }
+
+  /* Live market engine */
+  .live-toolbar {
+    display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-bottom:16px;
+  }
+  .live-controls {
+    display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+  }
+  .mk-btn {
+    border:1px solid var(--border); background:#fff; color:var(--text);
+    padding:8px 16px; border-radius:8px; cursor:pointer; font-size:13.5px;
+    transition: all .15s; font-family:inherit;
+  }
+  .mk-btn:hover { border-color: var(--primary); color: var(--primary); }
+  .mk-btn.active { background: var(--primary); color:#fff; border-color:var(--primary); }
+  .mk-btn.refresh { background:#eef2f9; border-color:#c9d6e8; }
+  .live-status { font-size:12.5px; color:var(--muted); margin-left:auto; }
+  .live-status .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#bbb; margin-right:6px; }
+  .live-status.online .dot { background: var(--green); }
+  .live-status.offline .dot { background: var(--red); }
+
+  .quote-strip { display:grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap:14px; margin-bottom:18px; }
+  .quote-card {
+    background:#fff; border:1px solid var(--border); border-radius:12px; padding:16px 18px;
+    box-shadow: var(--shadow);
+  }
+  .quote-card .qname { font-size:13px; color:var(--muted); }
+  .quote-card .qlast { font-size:24px; font-weight:700; margin:4px 0 2px; }
+  .quote-card .qchange { font-size:13px; }
+  .up { color: var(--red); }
+  .down { color: var(--green); }
+  .flat { color: var(--muted); }
+
+  .chart-wrap {
+    background:#fff; border:1px solid var(--border); border-radius:12px;
+    padding: 18px; box-shadow: var(--shadow);
+  }
+  /* 区间按钮放在独立工具条，固定在标题上方右对齐，避免标题变长时被挤换到左下 */
+  .chart-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 6px;
+  }
+  .chart-head { margin-bottom: 10px; }
+  .chart-head h3 { font-size:16px; color:var(--primary); margin:0; word-break: break-all; }
+  .chart-range { display:flex; gap:6px; flex-wrap:wrap; }
+  .chart-range .rk {
+    border:none; background:#eef2f9; color:var(--muted); padding:4px 12px;
+    border-radius:16px; cursor:pointer; font-size:12.5px; font-family:inherit;
+  }
+  .chart-range .rk.active { background:var(--primary); color:#fff; }
+  #klineChart { width:100%; height:420px; }
+  .chart-loading { text-align:center; color:var(--muted); padding:60px 0; font-size:14px; }
+
+  .note {
+    background:#eef2f9; border-left:4px solid var(--primary); padding:14px 18px;
+    border-radius:6px; font-size:14px; color:#333; margin-top:20px;
+  }
+
+  footer {
+    background:#12233f; color:#aebcce; padding:36px 0; font-size:13px;
+  }
+  footer .inner { max-width:980px; margin:0 auto; padding:0 24px; }
+  footer strong { color:#fff; }
+
+  @media (max-width:600px){
+    header h1 { font-size:22px; }
+    header { padding:36px 0 48px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="container">
+    <span class="badge">实时行情引擎 · 独立功能页</span>
+    <h1>ETF 实时行情与K线</h1>
+    <div class="sub">实时报价 · 前复权K线 · 区间切换 · 离线回退</div>
+    <div class="date-tag">自「A股下半年走势分析」页面抽取的行情模块</div>
+  </div>
+</header>
+
+<div class="container">
+  <div class="live-toolbar">
+    <div class="live-controls">
+      <span class="mk-btn refresh" id="btnRefresh">🔄 刷新</span>
+      <label style="font-size:13px;color:var(--muted);display:flex;align-items:center;gap:6px;">
+        <input type="checkbox" id="autoRefresh" checked> 自动刷新(30s)
+      </label>
+    </div>
+    <div class="live-status offline" id="liveStatus"><span class="dot"></span>加载中…</div>
+  </div>
+
+  <div class="quote-strip" id="quoteStrip">
+    <!-- 由 JS 填充 -->
+  </div>
+
+  <div class="chart-wrap">
+    <div class="chart-toolbar">
+      <div class="chart-range" id="rangeBtns">
+        <button class="rk" data-mode="ytd">今年来</button>
+        <button class="rk" data-monthoffset="1">1月</button>
+        <button class="rk" data-monthoffset="3">3月</button>
+        <button class="rk active" data-monthoffset="6">6月</button>
+        <button class="rk" data-yearoffset="1">1年</button>
+        <button class="rk" data-yearoffset="3">近三年</button>
+        <button class="rk" data-yearoffset="5">近五年</button>
+      </div>
+    </div>
+    <div class="chart-head">
+      <h3 id="chartTitle">中证红利ETF · K线走势</h3>
+    </div>
+    <div id="klineChart"><div class="chart-loading">正在加载行情数据…</div></div>
+  </div>
+  <div class="note" style="margin-top:14px;font-size:12.5px;">
+    <b>数据说明与复权状态：</b>本板块展示多只场内 ETF——<b>中证红利ETF（515080）</b>、<b>红利低波ETF易方达（563020）</b>、<b>红利质量ETF招商（159209）</b>、<b>自由现金流ETF华夏（159201）</b>，海外指数代表性 QDII：<b>纳指ETF国泰（513100）</b>、<b>标普500ETF（513500）</b>，以及商品类：<b>黄金ETF（518880）</b>。<br>
+    数据来源：<b>顶部实时价格卡</b>来自腾讯公开行情；<b>曲线K线</b>联网成功后来自<b>东方财富【前复权】接口</b>（fqt=1），用于消除分红除权对净值的影响。仅供研究参考、存在延迟，不作为投资依据。<br>
+    ⚠️ <b>复权状态提示：</b>当页面以 <code>file://</code> 直接打开或接口被跨域拦截时（未联网成功），<b>曲线为内置“示意参考走势”且<b style="color:#c8503c">不做复权处理</b></b>，仅供布局展示，非真实历史净值，勿据此判断涨跌。联网成功时曲线会切换为真实的前复权数据。
+  </div>
+</div>
+
+<footer>
+  <div class="inner">
+    <strong>免责声明</strong>：本页行情数据来自腾讯、东方财富公开接口，存在延迟，仅供研究参考，不作为投资依据。离线或接口受限时展示内置示意数据，非真实净值。投资有风险，入市需谨慎。
+  </div>
+</footer>
+
+<!-- 实时行情引擎（纯本地渲染，无需外部库，离线也可显示曲线） -->
+<script>
+(function () {
+  // ---------- 指数定义 ----------
+  var INDICES = [
+    { code: 'sh515080', name: '中证红利ETF' },
+    { code: 'sh563020', name: '红利低波ETF易方达' },
+    { code: 'sz159209', name: '红利质量ETF招商' },
+    { code: 'sz159201', name: '自由现金流ETF华夏' },
+    { code: 'sh513100', name: '纳指ETF国泰' },
+    { code: 'sh513500', name: '标普500ETF' },
+    { code: 'sh518880', name: '黄金ETF' }
+  ];
+
+  // ---------- 内置参考数据（离线回退用；联网成功时会用实时接口覆盖） ----------
+  var FALLBACK_QUOTES = {
+    'sh515080': { name: '中证红利ETF', last: 1.420, open: 1.418, pct: 0.35, change: 0.005 },
+    'sh563020': { name: '红利低波ETF易方达', last: 1.085, open: 1.082, pct: 0.28, change: 0.003 },
+    'sz159209': { name: '红利质量ETF招商', last: 1.356, open: 1.352, pct: 0.30, change: 0.004 },
+    'sz159201': { name: '自由现金流ETF华夏', last: 1.108, open: 1.105, pct: 0.27, change: 0.003 },
+    'sh513100': { name: '纳指ETF国泰', last: 1.558, open: 1.552, pct: 0.40, change: 0.006 },
+    'sh513500': { name: '标普500ETF', last: 1.462, open: 1.456, pct: 0.42, change: 0.006 },
+    'sh518880': { name: '黄金ETF', last: 6.528, open: 6.505, pct: 0.35, change: 0.023 }
+  };
+
+  // 内置参考数据（收盘价序列，仅用于离线回退展示，非实时真值）
+  // 统一为水平直线（恒定基准价），与真实行情曲线的起伏形态明显区分，避免混淆
+  function buildRefLine(code, len) {
+    var SEED = {
+      'sh515080': 1.42, 'sh563020': 1.085, 'sz159209': 1.356, 'sz159201': 1.108,
+      'sh513100': 1.558, 'sh513500': 1.462, 'sh518880': 6.528
+    };
+    var base = SEED[code] || 1.0;
+    var out = [];
+    var today = new Date();
+    // 生成按日回溯的参考日期（跳过周末，近似交易日）
+    var datesRef = [];
+    var dCursor = new Date(today);
+    while (datesRef.length < len) {
+      var dow = dCursor.getDay();
+      if (dow !== 0 && dow !== 6) datesRef.unshift(today.getFullYear() + '-' + pad(dCursor.getMonth() + 1) + '-' + pad(dCursor.getDate()));
+      dCursor.setDate(dCursor.getDate() - 1);
+    }
+    for (var i = 0; i < len; i++) {
+      out.push({ date: datesRef[i], close: Math.round(base * 100) / 100 });
+    }
+    return out;
+  }
+  function pad(n){ return n < 10 ? '0' + n : '' + n; }
+  // 返回日期 b 比日期 a 晚的天数（a、b 形如 YYYY-MM-DD）
+  function dayDiff(a, b) { return Math.round((new Date(b) - new Date(a)) / 86400000); }
+
+  // ---------- 状态 ----------
+  var state = { current: 'sh515080', days: 126, ytd: false, monthOffset: 6, yearOffset: 0, autoTimer: null };
+
+  // 报价 / K线 两个数据源分别跟踪，由状态栏统一合成，避免互相覆盖造成"价格明明在线却提示离线"
+  var dataSrc = { quote: false, kline: false };
+  // drawChart 请求序号：快速切换标的/区间时丢弃过期回调，避免旧响应覆盖新图表
+  var chartSeq = 0;
+
+  var $status = document.getElementById('liveStatus');
+  var $quoteStrip = document.getElementById('quoteStrip');
+  var $chartTitle = document.getElementById('chartTitle');
+
+  function setStatus(mode, txt) {
+    $status.className = 'live-status ' + mode;
+    $status.innerHTML = '<span class="dot"></span>' + txt;
+  }
+  // 依据两个数据源合成状态栏文案（报价/K线 分别处于 在线 或 示意，互不覆盖）
+  function updateStatus() {
+    if (dataSrc.quote && dataSrc.kline) {
+      setStatus('online', '在线 · 实时报价与K线');
+    } else if (dataSrc.quote) {
+      setStatus('online', '在线 · 报价实时；K线用内置示意数据');
+    } else if (dataSrc.kline) {
+      setStatus('online', '在线 · K线真实；报价用内置示意数据');
+    } else {
+      setStatus('offline', '离线 · 价格/曲线使用内置示意数据');
+    }
+  }
+  function fmtNum(n) {
+    return Number(n).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  function quoteClass(pct) {
+    if (pct > 0.0001) return 'up';
+    if (pct < -0.0001) return 'down';
+    return 'flat';
+  }
+  function sign(pct) { return pct > 0 ? '+' : ''; }
+
+  // ---------- 实时行情 ----------
+  function fetchQuotes() {
+    var codes = INDICES.map(function (x) { return x.code; }).join(',');
+    var url = 'https://qt.gtimg.cn/q=' + codes + '&r=' + Math.random();
+    try {
+      return fetch(url, { cache: 'no-store' })
+        .then(function (res) {
+          if (!res.ok) throw new Error(res.status);
+          return (typeof res.arrayBuffer === 'function') ? res.arrayBuffer() : res.text();
+        })
+        .then(function (buf) {
+          var txt = (buf instanceof ArrayBuffer || buf && buf.buffer instanceof ArrayBuffer)
+            ? new TextDecoder('gbk').decode(buf) : buf;
+          return txt;
+        });
+    } catch (e) { return Promise.reject(e); }
+  }
+
+  function parseTencentQuotes(text) {
+    var map = {};
+    var lines = text.split(';');
+    lines.forEach(function (line) {
+      var eq = line.indexOf('="');
+      if (eq < 0) return;
+      var m = line.match(/([a-z]{2}\d+)="([^"]*)"/);
+      if (!m) return;
+      var key = m[1], p = m[2].split('~');
+      var last = parseFloat(p[3]), chg = parseFloat(p[31]), pct = parseFloat(p[32]);
+      map[key] = {
+        name: p[1] || key,
+        last: isNaN(last) ? null : last,
+        change: isNaN(chg) ? null : chg,
+        pct: isNaN(pct) ? null : pct
+      };
+    });
+    return map;
+  }
+
+  function renderQuotes(map) {
+    var html = '';
+    INDICES.forEach(function (idx) {
+      var q = (map && map[idx.code]) || FALLBACK_QUOTES[idx.code] || null;
+      if (!q || q.last == null) { html += blankCard(idx); return; }
+      var cls = quoteClass(q.pct);
+      html += '<div class="quote-card" data-code="' + idx.code + '">'
+        + '<div class="qname">' + q.name + '</div>'
+        + '<div class="qlast ' + cls + '">' + fmtNum(q.last) + '</div>'
+        + '<div class="qchange ' + cls + '">'
+        + (q.pct != null ? sign(q.pct) + q.pct.toFixed(2) + '%' : '--')
+        + (q.change != null ? '（' + (q.change > 0 ? '+' : '') + q.change.toFixed(2) + '）' : '')
+        + '</div></div>';
+    });
+    $quoteStrip.innerHTML = html;
+    Array.prototype.forEach.call($quoteStrip.querySelectorAll('.quote-card'), function (card) {
+      card.style.cursor = 'pointer';
+      card.addEventListener('click', function () { selectIndex(card.getAttribute('data-code')); });
+    });
+  }
+
+  function blankCard(idx) {
+    return '<div class="quote-card"><div class="qname">' + idx.name + '</div><div class="qlast flat">--</div><div class="qchange flat">暂无数据</div></div>';
+  }
+
+  function refreshQuotes() {
+    fetchQuotes().then(function (text) {
+      var map = parseTencentQuotes(text);
+      var has = false;
+      INDICES.forEach(function (i) { if (map[i.code] && map[i.code].last != null) has = true; });
+      if (!has) throw new Error('empty');
+      renderQuotes(map);
+      dataSrc.quote = true;
+      updateStatus();
+    }).catch(function () {
+      renderQuotes(null);
+      dataSrc.quote = false;
+      updateStatus();
+    });
+  }
+
+  // ---------- 纯 Canvas 折线图（无需任何外部库） ----------
+  // 把我们的 ETF 代码（sh515080 / sz159209）转成东方财富 secid（1.沪 / 0.深 + 数字）
+  function toEastmoneyId(code) {
+    if (code.indexOf('sh') === 0) return '1.' + code.slice(2);
+    if (code.indexOf('sz') === 0) return '0.' + code.slice(2);
+    return code;
+  }
+
+  function drawChart(code, name) {
+    var reqSeq = ++chartSeq; // 本次请求序号：仅最新一次请求允许渲染，丢弃过期回调
+    $chartTitle.textContent = name + ' · 走势（前复权收盘价）';
+    var rows = buildRefLine(code, state.days); // 内置参考数据（示意），保证离线也能画出
+
+    // 联网时尝试用东方财富【前复权】K线覆盖（需 http 方式打开才能跨域）
+    var secid = toEastmoneyId(code);
+    // lmt 请求略多于区间需要，取回后按 state.days 在本地截取末尾N条，确保严格对齐右上角区间
+    var reqN = state.days + 20;
+    var url = 'https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=' + secid
+      + '&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58'
+      + '&klt=101&fqt=1&beg=0&end=20500101&lmt=' + reqN;
+    // 标题后缀标注：真实数据不满足所选区间时，在标题上明确标出，避免误判为完整区间
+    function setTitle(note) {
+      $chartTitle.textContent = name + ' · 走势（前复权收盘价）' + note;
+    }
+    try {
+      fetch(url, { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (json) {
+        if (reqSeq !== chartSeq) return; // 过期请求：用户已切换标的/区间，直接丢弃
+        var kls = json && json.data && json.data.klines;
+        if (kls && kls.length) {
+          // 统一转换成 {date, close}
+          var all = kls.map(function (row) {
+            var p = row.split(',');
+            // f51日期, f52开盘, f53收盘, f54最高, f55最低, ...
+            return { date: p[0], close: parseFloat(p[2]) };
+          });
+          if (state.ytd) {
+            // 今年来：按当年年份过滤，起点锁定当年第1个交易日
+            var curYear = String(new Date().getFullYear());
+            rows = all.filter(function (r) { return String(r.date).slice(0, 4) === curYear; });
+          } else if (state.monthOffset > 0 || state.yearOffset > 0) {
+            // 其它区间统一锚定到"自然日期起点"：
+            //   monthOffset N → 今天往前 N 个自然月的同一天
+            //   yearOffset  N → 今天往前 N 年（同一天）
+            // 若目标当天休市，数据中会自然取之后最近的开盘日
+            var nNow = new Date();
+            var bd;
+            if (state.monthOffset > 0) {
+              bd = new Date(nNow.getFullYear(), nNow.getMonth() - state.monthOffset, nNow.getDate());
+            } else {
+              bd = new Date(nNow.getFullYear() - state.yearOffset, nNow.getMonth(), nNow.getDate());
+            }
+            var boundary = bd.getFullYear() + '-' + pad(bd.getMonth() + 1) + '-' + pad(bd.getDate());
+            rows = all.filter(function (r) { return String(r.date) >= boundary; });
+          } else {
+            // 兜底：取最近 state.days 个交易日
+            rows = all.slice(-state.days);
+          }
+          // 校验真实数据是否覆盖所选区间，不足则在标题标明实际起点
+          var ts = null;
+          if (state.ytd) ts = curYear + '-01-01';
+          else if (state.monthOffset > 0 || state.yearOffset > 0) ts = boundary;
+          var note = '';
+          if (rows.length) {
+            if (ts) {
+              var firstDate = String(rows[0].date);
+              // 目标起点当天休市时数据会自然顺延到最近交易日（通常 ≤7 天），超过则视为数据不足
+              if (dayDiff(ts, firstDate) > 7) note = ' · 真实数据仅自 ' + firstDate + '，不足所选区间';
+            }
+            dataSrc.kline = true;
+            updateStatus();
+          } else {
+            rows = buildRefLine(code, state.days);
+            dataSrc.kline = false;
+            updateStatus();
+            note = ' · 示意直线（该区间无真实数据）';
+          }
+          setTitle(note);
+        } else {
+          dataSrc.kline = false;
+          updateStatus();
+          setTitle(' · 示意直线（非真实数据）');
+        }
+        renderCanvas(rows, name);
+      }).catch(function () {
+        if (reqSeq !== chartSeq) return; // 过期请求：直接丢弃
+        dataSrc.kline = false;
+        updateStatus();
+        setTitle(' · 示意直线（非真实数据）');
+        renderCanvas(rows, name);
+      });
+    } catch (e) {
+      dataSrc.kline = false;
+      updateStatus();
+      setTitle(' · 示意直线（非真实数据）');
+      renderCanvas(rows, name);
+    }
+
+    renderCanvas(rows, name); // 先用内置示意数据立即画出，实时前复权数据到了再刷新
+  }
+
+  function renderCanvas(rows, name) {
+    var el = document.getElementById('klineChart');
+    if (!el) return;
+    el.innerHTML = '';
+    var c = document.createElement('canvas');
+    var W = el.clientWidth || (el.parentNode.clientWidth - 40) || 800;
+    var H = 420;
+    var DPR = window.devicePixelRatio || 1;
+    c.width = W * DPR; c.height = H * DPR;
+    c.style.width = W + 'px'; c.style.height = H + 'px';
+    el.appendChild(c);
+    var ctx = c.getContext('2d');
+
+    var padL = 62, padR = 22, padT = 24, padB = 38;
+    var plotW = W - padL - padR, plotH = H - padT - padB;
+    var closes, dates;
+    try {
+      closes = rows.map(function (r) { return +r.close; });
+      dates = rows.map(function (r) { return String(r.date); });
+    } catch (e) { return; }
+
+    var min = Math.min.apply(null, closes), max = Math.max.apply(null, closes);
+    var span = (max - min) || 1; min -= span * 0.08; max += span * 0.08; span = (max - min) || 1;
+    var n = closes.length;
+    function X(i) { return padL + (n <= 1 ? 0 : (i / (n - 1)) * plotW); }
+    function Y(v) { return padT + plotH - ((v - min) / span) * plotH; }
+
+    // 核心绘图：每次调用都会“清空画布并完整重绘”，hover=-1 时不画竖线；peakIdx 为回撤起始（左侧最高点）下标
+    function paint(hoverI, peakIdx) {
+      // 清空（High-DPI 下需还原缩放）
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      ctx.clearRect(0, 0, W, H);
+
+      // 背景与网格
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H);
+      ctx.strokeStyle = '#eef1f7'; ctx.lineWidth = 1;
+      function fmtAxis(v) {
+        if (v < 10) return (v >= 0 ? v.toFixed(3) : v.toFixed(3));
+        return v.toFixed(0);
+      }
+      var gLines = 4;
+      for (var g = 0; g <= gLines; g++) {
+        var gy = padT + (g / gLines) * plotH;
+        ctx.beginPath(); ctx.moveTo(padL, gy); ctx.lineTo(W - padR, gy); ctx.stroke();
+        var val = max - (g / gLines) * span;
+        ctx.fillStyle = '#6b7280'; ctx.font = '11px sans-serif'; ctx.textAlign = 'right';
+        ctx.fillText(fmtAxis(val), padL - 8, gy + 4);
+      }
+
+      // X 轴刻度
+      ctx.textAlign = 'center';
+      var tickCount = Math.min(6, n);
+      // 超过约1年（>250交易日）时，横坐标显示带年份的日期，便于识别年份跨度
+      var overYear = n > 250;
+      for (var t = 0; t < tickCount; t++) {
+        var idxT = Math.round((t / (tickCount - 1)) * (n - 1));
+        ctx.fillStyle = '#9aa3af';
+        var lbl;
+        if (n <= 12) {
+          lbl = dates[idxT]; // 数据点很少：完整显示
+        } else if (overYear) {
+          lbl = dates[idxT].slice(0, 7); // 超过1年：显示 YYYY-MM，含年份
+        } else {
+          lbl = dates[idxT].slice(5);    // 1年内：显示 MM-DD
+        }
+        ctx.fillText(lbl, X(idxT), H - padB + 16);
+      }
+
+      // 面积渐变
+      var grd = ctx.createLinearGradient(0, padT, 0, padT + plotH);
+      grd.addColorStop(0, 'rgba(26,75,140,0.24)');
+      grd.addColorStop(1, 'rgba(26,75,140,0.02)');
+      ctx.beginPath();
+      ctx.moveTo(X(0), padT + plotH);
+      for (var ai = 0; ai < n; ai++) ctx.lineTo(X(ai), Y(closes[ai]));
+      ctx.lineTo(X(n - 1), padT + plotH);
+      ctx.closePath(); ctx.fillStyle = grd; ctx.fill();
+
+      // 回撤区间高亮：从“鼠标左侧最高点”到“当前悬停点”之间的区域着色
+      if (hoverI >= 0 && hoverI < n && peakIdx >= 0 && peakIdx <= hoverI) {
+        var hiGrd = ctx.createLinearGradient(0, padT, 0, padT + plotH);
+        hiGrd.addColorStop(0, 'rgba(200,80,60,0.32)');
+        hiGrd.addColorStop(1, 'rgba(200,80,60,0.06)');
+        ctx.beginPath();
+        ctx.moveTo(X(peakIdx), padT + plotH);
+        for (var hi = peakIdx; hi <= hoverI; hi++) ctx.lineTo(X(hi), Y(closes[hi]));
+        ctx.lineTo(X(hoverI), padT + plotH);
+        ctx.closePath(); ctx.fillStyle = hiGrd; ctx.fill();
+      }
+
+      // 折线
+      ctx.beginPath();
+      ctx.moveTo(X(0), Y(closes[0]));
+      for (var i = 1; i < n; i++) ctx.lineTo(X(i), Y(closes[i]));
+      ctx.strokeStyle = '#1a4b8c'; ctx.lineWidth = 2.2; ctx.lineJoin = 'round'; ctx.stroke();
+
+      // 起始/结束点
+      [0, n - 1].forEach(function (pt) {
+        ctx.beginPath(); ctx.arc(X(pt), Y(closes[pt]), 3, 0, Math.PI * 2);
+        ctx.fillStyle = '#1a4b8c'; ctx.fill();
+      });
+
+      // 回撤起始点（左侧最高点）标记
+      if (peakIdx >= 0 && peakIdx < n) {
+        ctx.beginPath(); ctx.arc(X(peakIdx), Y(closes[peakIdx]), 5, 0, Math.PI * 2);
+        ctx.fillStyle = '#c8503c'; ctx.fill();
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+      }
+
+      // 悬停竖线（虚线，随全量重绘，不会残留）
+      if (hoverI >= 0 && hoverI < n) {
+        ctx.strokeStyle = '#d5dce8'; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+        ctx.beginPath(); ctx.moveTo(X(hoverI), padT); ctx.lineTo(X(hoverI), padT + plotH); ctx.stroke();
+        ctx.setLineDash([]);
+        // 在数据点画个小圆点
+        ctx.beginPath(); ctx.arc(X(hoverI), Y(closes[hoverI]), 4, 0, Math.PI * 2);
+        ctx.fillStyle = '#c8a24a'; ctx.fill();
+      }
+    }
+
+    paint(-1); // 初始不画竖线
+
+    // 悬浮提示（tooltip）
+    var tip = document.createElement('div');
+    tip.style.cssText = 'position:absolute;pointer-events:none;display:none;background:rgba(18,35,63,.92);color:#fff;padding:6px 12px;border-radius:6px;font-size:12px;z-index:10;';
+    el.style.position = 'relative';
+    el.appendChild(tip);
+
+    // 用 onmousemove 属性赋值而非 addEventListener：renderCanvas 每次重绘会重建 canvas，若用 addEventListener
+    // 会在容器 el 上不断累积旧监听器（引用已脱离 DOM 的旧 canvas/tip），造成内存与性能泄漏
+    el.onmousemove = function (e) {
+      var rect = c.getBoundingClientRect();
+      var mx = e.clientX - rect.left;
+      var best = 0, bd = 1e9;
+      for (var i = 0; i < n; i++) { var d = Math.abs(X(i) - mx); if (d < bd) { bd = d; best = i; } }
+      // 找出鼠标左侧（首日到当前点）范围内已发生的最高点及其下标
+      var peakIdx = 0;
+      var peak = closes[0];
+      for (var pi = 0; pi <= best; pi++) { if (closes[pi] > peak) { peak = closes[pi]; peakIdx = pi; } }
+
+      // 全量重绘（清空→重画→画竖线+回撤区域着色），旧竖线不会残留
+      paint(best, peakIdx);
+      tip.style.display = 'block';
+
+      // 提示框跟随鼠标：鼠标往哪走，提示框就往哪走，由你自己控制位置
+      var my = e.clientY - rect.top;
+      // 相对鼠标右下角的小偏移（避免完全盖住鼠标），可在下方常量调整
+      var OFFX = 16, OFFY = 16;
+      var lx = mx + OFFX, ty = my + OFFY;
+      // 边界夹取，避免提示框超出图表容器
+      var tipW = 190, tipH = 104;
+      lx = Math.max(6, Math.min(lx, W - tipW - 6));
+      ty = Math.max(6, Math.min(ty, H - tipH - 6));
+      tip.style.left = Math.round(lx) + 'px';
+      tip.style.top = Math.round(ty) + 'px';
+
+      // 相对于曲线第一个数据点的累计收益率
+      var firstClose = closes[0];
+      var ret = firstClose ? ((closes[best] - firstClose) / firstClose) * 100 : 0;
+      var retTxt = (ret >= 0 ? '+' : '') + ret.toFixed(2) + '%';
+      var retColor = ret > 0.0001 ? '#e04c4c' : (ret < -0.0001 ? '#1e8e5a' : '#fff');
+      var closeColor = ret > 0.0001 ? '#e04c4c' : (ret < -0.0001 ? '#1e8e5a' : '#fff');
+
+      // 鼠标左侧最高点以来的回撤（回撤 <= 0）：负值=绿色，0或以上=红色
+      var dd = peak ? ((closes[best] - peak) / peak) * 100 : 0;
+      var ddTxt = dd.toFixed(2);
+      var ddColor = dd < -0.0001 ? '#1e8e5a' : '#e04c4c';
+
+      tip.innerHTML = dates[best] + '<br/>收盘: <b style="color:' + closeColor + '">' + fmtNum(closes[best]) + '</b>'
+        + '<br/>首日以来收益: <b style="color:' + retColor + '">' + retTxt + '</b>'
+        + '<br/>左侧最高 ' + dates[peakIdx] + ' <b style="color:#c8503c">' + fmtNum(peak) + '</b>，至今回撤 <b style="color:' + ddColor + '">' + ddTxt + '%</b>';
+    };
+
+    el.onmouseleave = function () {
+      tip.style.display = 'none';
+      paint(-1); // 全量重绘，清除竖线虚影与回撤着色
+    };
+  }
+
+  // ---------- 交互 ----------
+  function selectIndex(code) {
+    state.current = code;
+    var idx = null;
+    INDICES.forEach(function (i) { if (i.code === code) idx = i; });
+    if (idx) drawChart(idx.code, idx.name);
+    Array.prototype.forEach.call($quoteStrip.querySelectorAll('.quote-card'), function (c) {
+      c.style.outline = c.getAttribute('data-code') === code ? '2px solid #1a4b8c' : 'none';
+      c.style.background = c.getAttribute('data-code') === code ? '#f0f3fa' : '';
+    });
+  }
+
+  // 今年以来已过交易日数（跳过周末，近似A股交易日；精确交易日数以交易日历为准）
+  function ytdTradingDays() {
+    var now = new Date();
+    var y = now.getFullYear();
+    var day = new Date(y, 0, 1); // 当年1月1日
+    var cur = new Date(now.getTime());
+    var count = 0; // 在下方循环中统计
+    // 从年初到今天的自然日里剔除周末作为近似交易日
+    var d = new Date(day.getTime());
+    while (d.getTime() <= cur.getTime()) {
+      var dow = d.getDay();
+      if (dow !== 0 && dow !== 6) count++;
+      d.setDate(d.getDate() + 1);
+    }
+    return count;
+  }
+
+  var $rangeBtns = document.getElementById('rangeBtns');
+  $rangeBtns.addEventListener('click', function (e) {
+    var btn = e.target;
+    if (!btn.classList.contains('rk')) return;
+    Array.prototype.forEach.call($rangeBtns.querySelectorAll('.rk'), function (b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    // 区间模式（全部按"自然日期锚定起点"，与近三年/近五年统一）：
+    //   ytd          → 今年来：按当年年份过滤，起点=当年第1个交易日
+    //   monthoffset  → 1月/3月/6月：从今天往前 N 个自然月的同一天起
+    //   yearoffset   → 1年/近三年/近五年：从今天往前 N 年（同一天）起
+    if (btn.getAttribute('data-mode') === 'ytd') {
+      state.ytd = true;
+      state.monthOffset = 0;
+      state.yearOffset = 0;
+      state.days = ytdTradingDays();
+    } else {
+      state.ytd = false;
+      state.monthOffset = parseInt(btn.getAttribute('data-monthoffset') || '0', 10);
+      state.yearOffset = parseInt(btn.getAttribute('data-yearoffset') || '0', 10);
+      // 请求足够可覆盖到"目标起点日期"的数据量
+      var mo = state.monthOffset, yo = state.yearOffset;
+      state.days = yo * 250 + Math.ceil(mo * 21) + ytdTradingDays();
+    }
+    var idx = null;
+    INDICES.forEach(function (i) { if (i.code === state.current) idx = i; });
+    if (idx) drawChart(idx.code, idx.name);
+  });
+
+  document.getElementById('btnRefresh').addEventListener('click', function () {
+    refreshQuotes();
+    var idx = null;
+    INDICES.forEach(function (i) { if (i.code === state.current) idx = i; });
+    if (idx) drawChart(idx.code, idx.name);
+  });
+
+  var $auto = document.getElementById('autoRefresh');
+  $auto.addEventListener('change', function () { if ($auto.checked) startAuto(); else stopAuto(); });
+  function startAuto() { stopAuto(); state.autoTimer = setInterval(function () { refreshQuotes(); }, 30000); }
+  function stopAuto() { if (state.autoTimer) { clearInterval(state.autoTimer); state.autoTimer = null; } }
+
+  // ---------- 初始化（内置数据立即绘图，保证曲线可见）----------
+  refreshQuotes();
+  var initIdx = null;
+  INDICES.forEach(function (i) { if (i.code === state.current) initIdx = i; });
+  if (initIdx) drawChart(initIdx.code, initIdx.name);
+  startAuto();
+})();
+</script>
+
+</body>
+</html>
